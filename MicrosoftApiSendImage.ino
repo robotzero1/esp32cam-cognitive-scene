@@ -1,8 +1,6 @@
 #include <ArduinoJson.h>
 #include <WiFiClientSecure.h>
 #include "esp_camera.h"
-#include "AudioOutputI2S.h"
-#include "ESP8266SAM.h"
 #include <Wire.h>
 #include <hd44780.h>                       // main hd44780 header
 #include <hd44780ioClass/hd44780_I2Cexp.h> // i2c expander i/o class header
@@ -27,20 +25,22 @@
 
 
 StaticJsonDocument<768> doc;
-AudioOutputI2S *out;
 hd44780_I2Cexp lcd; // declare lcd object: auto locate & auto config expander chip
 WiFiClientSecure client;
 
-const char* ssid = "NSA HONEYPOT";
-const char* password = "only4andrew";
+const char* ssid = "NSA";
+const char* password = "orange";
 
-const char* host = "northcentralus.api.cognitive.microsoft.com";
-const char* Ocp_Apim_Subscription_Key = "180cdd74c56d4332bfe9968e723c3004";
+const char* host = "northcentralus.api.cognitive.microsoft.com"; //edit for your chosen server
+const char* Ocp_Apim_Subscription_Key = "see-tutorial-for-key";
 const int Port = 443;
 const char* boundry = "dgbfhfh";
 
 const int LCD_COLS = 16;
 const int LCD_ROWS = 2;
+
+const int trigger_button_pin = 3;
+long trigger_button_millis = 0;
 
 void setup()
 {
@@ -56,6 +56,8 @@ void setup()
     Serial.print(".");
   }
   Serial.println("WiFi connected");
+
+  pinMode(trigger_button_pin, INPUT);
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -103,9 +105,6 @@ void setup()
   sensor_t * s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_VGA);
 
-  out = new AudioOutputI2S(1, 0, 8, 0);
-  out->SetPinout(12, 13, 14); // b l d
-
   connectToServer();
 }
 
@@ -121,9 +120,15 @@ void connectToServer()
 
 void sendPhotoToServer()
 {
+
+  lcd.clear();
+  lcd.print("Analysis");
+  lcd.setCursor(0, 1);
+  lcd.print("requested.");
+  
   String start_request = "";
   String end_request = "";
-
+  
   start_request = start_request + "--" + boundry + "\r\n";
   start_request = start_request + "Content-Disposition: form-data; name=\"file\"; filename=\"CAM.jpg\"\r\n";
   start_request = start_request + "Content-Type: image/jpg\r\n";
@@ -144,7 +149,7 @@ void sendPhotoToServer()
 
   int contentLength = (int)fb->len + start_request.length() + end_request.length();
 
-  String headers = "POST https://northcentralus.api.cognitive.microsoft.com/vision/v3.1/describe?maxCandidates=1&language=en HTTP/1.1\r\n";
+  String headers = "POST https://northcentralus.api.cognitive.microsoft.com/vision/v3.1/describe?maxCandidates=1&language=en HTTP/1.1\r\n"; //edit for your server
   headers = headers + "Host: " + host + "\r\n";
   headers = headers + "User-Agent: ESP32" + "\r\n";
   headers = headers + "Accept: */*\r\n";
@@ -155,6 +160,9 @@ void sendPhotoToServer()
   client.print(headers);
   Serial.print(headers);
   client.flush();
+  
+  lcd.setCursor(10, 1);
+  lcd.print(".");
 
   Serial.print(start_request);
   client.print(start_request);
@@ -171,7 +179,10 @@ void sendPhotoToServer()
   client.write(fb->buf, remain);
   client.flush();
   client.print(end_request);
-
+  
+  lcd.setCursor(11, 1);
+  lcd.print(".");
+  
   // header response
   while (client.connected()) {
     String line = client.readStringUntil('\n');
@@ -181,7 +192,7 @@ void sendPhotoToServer()
       break;
     }
   }
-  // reponse body
+  // response body
   String description;
   while (client.available()) {
     char c = client.read();
@@ -201,27 +212,28 @@ void sendPhotoToServer()
   float description_captions_0_confidence = doc["description"]["captions"][0]["confidence"];
   Serial.println(descriptionWithFullStop);
 
+  // TODO - Use confidence to add 'Might be...', 'Looks like...', 'I'm sure...' to phrase
+
   lcd.clear();
-  lcd.print(description_captions_0_text);  
+  lcd.lineWrap();
+  lcd.print(description_captions_0_text);
 
-  out->begin();
-  ESP8266SAM *sam = new ESP8266SAM;
-  sam->SetVoice(sam->SAMVoice::VOICE_SAM);
-  sam->Say(out, descriptionWithFullStop);
-  delete sam;
-  out->stop();
-
-  int scrollStepsNeeded =  strlen(description_captions_0_text) - LCD_COLS;
-  for (int i = 1; i <= scrollStepsNeeded; i++) {
-    lcd.scrollDisplayLeft();
-    delay(200);
-  }
+  // Or wrap rather than scroll
+  //  int scrollStepsNeeded =  strlen(description_captions_0_text) - LCD_COLS;
+  //  for (int i = 1; i <= scrollStepsNeeded; i++) {
+  //    lcd.scrollDisplayLeft();
+  //    delay(200);
+  //  }
 
 }
 
 void loop()
 {
-  sendPhotoToServer();
-  delay(10000);
 
+  // add in a delay to avoid repeat presses
+  if (digitalRead(trigger_button_pin) == HIGH && millis() - trigger_button_millis > 1000) {
+    trigger_button_millis = millis();
+    Serial.println("button pressed");
+    sendPhotoToServer();
+  }
 }
